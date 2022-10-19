@@ -1,0 +1,5 @@
+__pycache__/
+config.py
+history.json
+test.py
+time_mood_data.sqlite

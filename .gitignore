@@ -1,5 +1,5 @@
 __pycache__/
 config.py
 test.py
-time_mood_data.sqlite
+yt_data.sqlite
 mwaa_public_network.yml

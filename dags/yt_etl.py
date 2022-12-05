@@ -3,7 +3,6 @@ import pandas as pd
 import sqlite3
 import json
 import re
-import datetime
 import requests
 import config
 from google.cloud import language_v1
@@ -27,26 +26,42 @@ def classify_text(text_content):
     else:
         return ""
 
-def main():
-    with open("history.json", "r", encoding="utf-8") as file:
-        history_data = json.load(file)
+def run_yt_etl():
+    db_file = "C:/Users/glliao/AppData/Local/Google/Chrome/User Data/Default/History"
+    conn = sqlite3.connect(db_file)
+    cursor = conn.cursor()
+    sql_query = """
+    SELECT
+    urls.url,
+    datetime(visit_time/1000000+strftime('%s','1601-01-01'),'unixepoch','localtime') AS vt
+    FROM urls JOIN visits
+    ON vt>datetime('now','-7 day') AND urls.id=visits.url
+    """
+    cursor.execute(sql_query)
+    history_data = cursor.fetchall()
+    conn.close()
     id_time_list = []
-    for site in history_data:
-        match = re.search("\?v=", site["url"])
+    for url, visit_time in history_data:
+        match = re.search("\?v=", url)
         if match:
             start_index = match.end()
-            video_id = site["url"][start_index:start_index + 11]
-            timestamp = datetime.datetime(1970, 1, 1) + datetime.timedelta(microseconds=site["visitTime"]*1e3-1.8e10)
-            id_time_list.append((video_id, timestamp.strftime("%m/%d/%Y, %H:%M:%S")))
+            video_id = url[start_index:start_index + 11]
+            id_time_list.append((video_id, visit_time))
     api_key = config.API_KEY
     time_data = []
     mood_data = []
-    for id_time_pair in id_time_list:
-        res = requests.get("https://www.googleapis.com/youtube/v3/videos?part=snippet&id={}&key={}".format(id_time_pair[0], api_key))
+    title_data = []
+    channel_data = []
+    category_data = []
+    for id, time in id_time_list:
+        res = requests.get("https://www.googleapis.com/youtube/v3/videos?part=snippet&id={}&key={}".format(id, api_key))
         if res.status_code == 200:
             info = json.loads(res.text)
             if len(info["items"]) > 0:
-                category = classify_text(info["items"][0]["snippet"]["title"])
+                video = info["items"][0]["snippet"]
+                title = video["title"]
+                channel = video["channelTitle"]
+                category = classify_text(title)
                 matches = []
                 mood_level = 4
                 matches.append(re.search("Entertainment|News", category))
@@ -67,29 +82,37 @@ def main():
                     mood_level = 6
                 elif matches[5]:
                     mood_level = 7
-                time_data.append(id_time_pair[1])
+                time_data.append(time)
                 mood_data.append(mood_level)
-    DATABASE_LOCATION = "sqlite:///time_mood_data.sqlite"
-    time_mood_dict = {
+                title_data.append(title)
+                channel_data.append(channel)
+                category_data.append(category)
+    DATABASE_LOCATION = "sqlite:///yt_data.sqlite"
+    yt_dict = {
         "timestamp": time_data,
-        "mood_level": mood_data
+        "mood_level": mood_data,
+        "title": title_data,
+        "channel": channel_data,
+        "category": category_data
     }
-    time_mood_df = pd.DataFrame(time_mood_dict, columns = ["timestamp", "mood_level"])
+    yt_df = pd.DataFrame(yt_dict, columns = [*yt_dict])
     engine = sqlalchemy.create_engine(DATABASE_LOCATION)
-    conn = sqlite3.connect("time_mood_data.sqlite")
+    conn = sqlite3.connect("yt_data.sqlite")
     cursor = conn.cursor()
     sql_query = """
-    CREATE TABLE IF NOT EXISTS time_mood_data(
+    CREATE TABLE IF NOT EXISTS yt_data(
         timestamp VARCHAR(200),
-        mood_level INT(10)
+        mood_level INT(10),
+        title VARCHAR(200),
+        channel VARCHAR(200),
+        category VARCHAR(200)
     )
     """
     cursor.execute(sql_query)
     try:
-        time_mood_df.to_sql("time_mood_data", engine, index=False, if_exists='append')
+        yt_df.to_sql("yt_data", engine, index=False, if_exists='append')
     except:
         print("Data already exists in the database")
     conn.close()
-    
 if __name__ == "__main__":
-    main()
+    run_yt_etl()
